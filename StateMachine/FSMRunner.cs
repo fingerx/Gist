@@ -2,6 +2,7 @@
 
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 using UnityEngine;
 
 namespace nobnak.Gist.StateMachine {
@@ -47,6 +48,7 @@ namespace nobnak.Gist.StateMachine {
 
         bool _enabled;
         FSMRunner _runner;
+		int _lock = 0;
 
         State _current;
         State _last;
@@ -54,7 +56,6 @@ namespace nobnak.Gist.StateMachine {
 		StateData _currentData;
 		StateData _lastData;
 
-		bool _queueInProcess;
         T _lastQueuedStateName;
         Queue<StateData> stateQueue;
 
@@ -92,27 +93,28 @@ namespace nobnak.Gist.StateMachine {
         }
 
         public FSM<T> Init(T initialStateName = default(T)) {
-            return GotoImmediate(initialStateName);
+			_Goto(new StateData(initialStateName));
+			return this;
         }
         public FSM<T> Goto(T nextStateName, params object[] reason) {
-            switch (transitionMode) {
-                default:
-                    return GotoQueued(nextStateName, reason);
-                case TransitionModeEnum.Immediate:
-                    return GotoImmediate(nextStateName, reason);
-            }
-        }
-        public FSM<T> GotoQueued(T nextStateName, params object[] reason) {
-			if (!EqualsToLastQueued(nextStateName)) {
-				Enqueue(new StateData(nextStateName, reason));
+			Enqueue(nextStateName, reason);
+
+			switch (transitionMode) {
+				case TransitionModeEnum.Immediate:
+					_GotoInQueue();
+					break;
 			}
 
+			return this;
+		}
+		public FSM<T> GotoQueued(T nextStateName, params object[] reason) {
+			Enqueue(new StateData(nextStateName, reason));
 			return this;
         }
 
 		public FSM<T> GotoImmediate(T nextStateName, params object[] reason) {
-			if (!EqualsToCurrent(nextStateName))
-				_Goto(new StateData(nextStateName, reason));
+			Enqueue(new StateData(nextStateName, reason));
+			_GotoInQueue();
             return this;
         }
 
@@ -122,9 +124,17 @@ namespace nobnak.Gist.StateMachine {
 
             _GotoInQueue();
 
-            if (_current != null)
-                _current.UpdateState(this);
-        }
+			if (_current != null) {
+				try {
+					if (Interlocked.Increment(ref _lock) == 1)
+						_current.UpdateState(this);
+				} finally {
+					Interlocked.Decrement(ref _lock);
+				}
+			}
+
+			_GotoInQueue();
+		}
 
         public bool TryGetState(T name, out State state) {
             return _stateMap.TryGetValue (name, out state);
@@ -137,9 +147,13 @@ namespace nobnak.Gist.StateMachine {
                 _runner = null;
             }
         }
-#endregion
+		#endregion
 
-        protected void _Goto(StateData nextData) {
+		protected void Enqueue(T nextStateName, object[] reason) {
+			if (!EqualsToLastQueued(nextStateName))
+				Enqueue(new StateData(nextStateName, reason));
+		}
+		protected void _Goto(StateData nextData) {
             State next;
             if (!TryGetState(nextData, out next) || next == null) {
                 Debug.LogWarningFormat("There is no state {0}", nextData.state);
@@ -149,29 +163,30 @@ namespace nobnak.Gist.StateMachine {
 			if (_current == next)
 				Debug.LogFormat("State already in {0}", next);
 
-            _last = _current;
+			if (_current != null)
+				_current.ExitState(this);
+
+			_last = _current;
             _current = next;
 
 			_lastData = _currentData;
 			_currentData = nextData;
 
-			if (_last != null)
-                _last.ExitState(this);
             _current.EnterState(this);
             return;
         }
 
 		protected void _GotoInQueue() {
-            if (_queueInProcess)
-                return;
-            _queueInProcess = true;
-
-            while (stateQueue.Count > 0) {
-                var next = stateQueue.Dequeue();
-                _Goto(next);
-            }
-
-            _queueInProcess = false;
+			try {
+				if (Interlocked.Increment(ref _lock) == 1) {
+					while (stateQueue.Count > 0) {
+						var next = stateQueue.Dequeue();
+						_Goto(next);
+					}
+				}
+			} finally {
+				Interlocked.Decrement(ref _lock);
+			}
         }
         protected void Enqueue(StateData next) {
             _lastQueuedStateName = next;
@@ -191,7 +206,7 @@ namespace nobnak.Gist.StateMachine {
 		protected bool EqualsToLastQueued(T other) {
 			T last;
 			return TryGetLastFromQueue(out last) ?
-				EqualityComparer<T>.Default.Equals(last, other) : 
+				EqualityComparer<T>.Default.Equals(last, other) :
 				EqualsToCurrent(other);
 		}
 		protected string QueueToString() {
@@ -206,7 +221,7 @@ namespace nobnak.Gist.StateMachine {
 		}
 
 		#region Classes
-		public class State { 
+		public class State {
             public readonly T name;
 
             System.Action<FSM<T>> _enter;

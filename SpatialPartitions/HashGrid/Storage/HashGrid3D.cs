@@ -1,4 +1,4 @@
-//#define PARALLEL
+﻿//#define PARALLEL
 
 using System.Collections;
 using System.Collections.Generic;
@@ -6,14 +6,14 @@ using UnityEngine;
 
 namespace nobnak.Gist.HashGridSystem.Storage {
 
-    public class Storage3D<T> : System.IDisposable, IEnumerable<T> where T : class {
+    public class HashGrid3D<T> : System.IDisposable, IEnumerable<T> where T : class {
         System.Func<T, Vector3> _GetPosition;
-        List<int>[] _grid;
+        List<T>[] _grid;
         List<T> _points;
         List<Vector3> _positions;
         Hash _hash;
 
-        public Storage3D(System.Func<T, Vector3> GetPosition, float cellSize, int nx, int ny, int nz) {
+        public HashGrid3D(System.Func<T, Vector3> GetPosition, float cellSize, int nx, int ny, int nz) {
             this._GetPosition = GetPosition;
             this._points = new List<T> ();
             this._positions = new List<Vector3> ();
@@ -24,19 +24,12 @@ namespace nobnak.Gist.HashGridSystem.Storage {
         public int Count { get { return _points.Count; } }
 
         public void Add(T point) {
-			var i = _points.Count;
-			var pos = _GetPosition(point);
             _points.Add (point);
-			_positions.Add(pos);
-            AddOnGrid(i, pos);
+            AddOnGrid(point, _GetPosition(point));
         }
         public void Remove(T point) {
-			var i = _points.IndexOf(point);
-			if (i >= 0) {
-				RemoveOnGrid(i, _GetPosition(point));
-				_points.RemoveAt(i);
-				_positions.RemoveAt(i);
-			}
+            RemoveOnGrid(point, _GetPosition(point));
+            _points.Remove (point);
         }
         public T IndexOf(int index) {
             return _points [index];
@@ -48,13 +41,12 @@ namespace nobnak.Gist.HashGridSystem.Storage {
             var r2 = distance * distance;
             foreach (var id in _hash.CellIds(center, distance)) {
                 var cell = _grid [id];
-                foreach (var i in cell) {
-					var s = _points[i] as S;
+                foreach (var p in cell) {
+                    var s = p as S;
                     if (s == null)
                         continue;
 
-					var pos = _positions[i];
-                    var d2 = (pos - center).sqrMagnitude;
+                    var d2 = (_GetPosition (s) - center).sqrMagnitude;
                     if (d2 < r2)
                         yield return s;
                 }
@@ -64,22 +56,32 @@ namespace nobnak.Gist.HashGridSystem.Storage {
             _hash = new Hash (cellSize, nx, ny, nz);
             var totalCells = nx * ny * nz;
             if (_grid == null || _grid.Length != totalCells) {
-                _grid = new List<int>[totalCells];
+                _grid = new List<T>[totalCells];
                 for (var i = 0; i < _grid.Length; i++)
-                    _grid [i] = new List<int> ();
+                    _grid [i] = new List<T> ();
             }
             Update ();
         }
         public void Update() {
-            for (var i = 0; i < _grid.Length; i++)
+            var limit = _grid.Length;
+            #if PARALLEL
+            Parallel.For(0, limit, (i) => _grid[i].Clear());
+            #else
+            for (var i = 0; i < limit; i++)
                 _grid [i].Clear ();
+            #endif
 
+            limit = _points.Count;
             _positions.Clear ();
-            for (var i = 0; i < _points.Count; i++)
+            for (var i = 0; i < limit; i++)
                 _positions.Add(_GetPosition (_points [i]));
 
-            for (var i = 0; i < _positions.Count; i++)
-                AddOnGrid (i, _positions [i]);
+            #if PARALLEL
+            Parallel.For (0, limit, Parallel_AddOnGrid);
+            #else
+            for (var i = 0; i < limit; i++)
+                AddOnGrid (_points [i], _positions [i]);
+            #endif
         }
         public IEnumerator UpdateAsync(MonoBehaviour m) {
             var limit = _grid.Length;
@@ -103,22 +105,23 @@ namespace nobnak.Gist.HashGridSystem.Storage {
         }
 
         void Parallel_AddOnGrid(int i) {
+            var point = _points [i];
             var pos = _positions [i];
             var id = _hash.CellId (pos);
             var cell = _grid [id];
             lock (cell) {
-                cell.Add (i);
+                cell.Add (point);
             }
         }
-        void AddOnGrid (int pointIndex, Vector3 pos) {
+        void AddOnGrid (T point, Vector3 pos) {
             var id = _hash.CellId (pos);
             var cell = _grid [id];
-            cell.Add (pointIndex);
+            cell.Add (point);
         }
-        void RemoveOnGrid (int pointIndex, Vector3 pos) {
+        void RemoveOnGrid (T point, Vector3 pos) {
             var id = _hash.CellId (pos);
             var cell = _grid [id];
-            cell.Remove (pointIndex);
+            cell.Remove (point);
         }
 
         #region IDisposable implementation

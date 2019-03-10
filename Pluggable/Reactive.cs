@@ -17,21 +17,26 @@ namespace nobnak.Gist {
 
 		#region public
 		public abstract bool AreEqual(T a, T b);
-		public T Value {
+		public virtual T Value {
 			get { return data; }
 			set {
 				if (!AreEqual(data, value)) {
-					data = value;
-					ForceNotifyChanged();
+					SetData(value);
 				}
 			}
 		}
-		public void ForceNotifyChanged() {
+		public virtual void ForceNotifyChanged() {
 			if (Changed != null)
 				Changed(this);
 		}
 		#endregion
 
+		#region member
+		protected virtual void SetData(T value) {
+			data = value;
+			ForceNotifyChanged();
+		}
+		#endregion
 		#region static
 		public static implicit operator T(BaseReactive<T> reactive) {
 			return reactive.data;
@@ -62,6 +67,18 @@ namespace nobnak.Gist {
 		}
 		public static implicit operator ReactiveObject<T>(T data) {
 			return new ReactiveObject<T>(data);
+		}
+	}
+	[System.Serializable]
+	public class ReactiveValue<T> : BaseReactive<T> where T : struct {
+		public ReactiveValue(T data) : base(data) { }
+		public ReactiveValue() : base() { }
+
+		public override bool AreEqual(T a, T b) {
+			return a.Equals(b);
+		}
+		public static implicit operator ReactiveValue<T>(T data) {
+			return new ReactiveValue<T>(data);
 		}
 	}
 }
